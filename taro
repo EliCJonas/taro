@@ -117,6 +117,29 @@ ConfirmModal {
     align: center middle;
 }
 
+ContextMenu {
+    align: center middle;
+}
+
+#context-menu {
+    width: 28;
+    height: auto;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#context-menu Button {
+    width: 100%;
+    margin-top: 1;
+    border: none;
+    background: $surface-lighten-1;
+}
+
+#context-menu Button:focus {
+    background: $primary;
+}
+
 #modal-container {
     width: 50;
     height: auto;
@@ -252,7 +275,7 @@ class AppIcon(Static, can_focus=True):
     def on_click(self, event: events.Click) -> None:
         event.stop()
         if event.button == 3:
-            self.app.open_edit(self._index)
+            self.app.open_context_menu(self._index)
         else:
             self.action_launch()
 
@@ -333,6 +356,97 @@ class AddEditModal(ModalScreen):
             self.dismiss({"icon": icon, "name": name, "command": command})
 
 
+class ReorderModal(ModalScreen):
+    """Reorder all apps via a keyboard-navigable list."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Cancel"),
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
+    ]
+
+    def __init__(self, apps: list[dict], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._apps = [dict(a) for a in apps]
+        self._cursor = 0
+
+    def compose(self) -> ComposeResult:
+        with Container(id="reorder-container"):
+            yield Label("Reorder Apps", classes="modal-title")
+            yield Label("↑↓ move  •  Enter confirm  •  Esc cancel", classes="reorder-hint")
+            yield Static(id="reorder-list")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Cancel", id="cancel-btn", classes="btn-cancel")
+                yield Button("Save", id="save-btn", classes="btn-primary")
+
+    def on_mount(self) -> None:
+        self._render_list()
+
+    def _render_list(self) -> None:
+        lines = []
+        for i, app in enumerate(self._apps):
+            icon = app.get("icon", "▶")
+            name = app.get("name", "App")
+            if i == self._cursor:
+                lines.append(f"[bold reverse] {icon} {name} [/bold reverse]")
+            else:
+                lines.append(f"  {icon} {name}")
+        self.query_one("#reorder-list", Static).update("\n".join(lines))
+
+    def action_move_up(self) -> None:
+        if self._cursor > 0:
+            self._apps[self._cursor], self._apps[self._cursor - 1] = (
+                self._apps[self._cursor - 1],
+                self._apps[self._cursor],
+            )
+            self._cursor -= 1
+            self._render_list()
+
+    def action_move_down(self) -> None:
+        if self._cursor < len(self._apps) - 1:
+            self._apps[self._cursor], self._apps[self._cursor + 1] = (
+                self._apps[self._cursor + 1],
+                self._apps[self._cursor],
+            )
+            self._cursor += 1
+            self._render_list()
+
+    def on_key(self, event) -> None:
+        if event.key == "enter":
+            self.dismiss(self._apps)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            self.dismiss(self._apps)
+
+
+class ContextMenu(ModalScreen):
+    """Right-click context menu for an icon."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Close")]
+
+    def __init__(self, app_data: dict, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._app_data = app_data
+
+    def compose(self) -> ComposeResult:
+        icon = self._app_data.get("icon", "▶")
+        name = self._app_data.get("name", "App")
+        with Container(id="context-menu"):
+            yield Label(f"{icon}  {name}", classes="modal-title")
+            yield Button("▶  Launch", id="launch-btn")
+            yield Button("✎  Edit", id="edit-btn")
+            yield Button("✕  Remove", id="remove-btn", classes="btn-danger")
+
+    def on_mount(self) -> None:
+        self.query_one("#launch-btn").focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id)
+
+
 class ConfirmModal(ModalScreen):
     """Delete confirmation dialog."""
 
@@ -344,11 +458,11 @@ class ConfirmModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="confirm-container"):
-            yield Label("Delete App", classes="modal-title")
+            yield Label("Remove App", classes="modal-title")
             yield Label(f'\nRemove "[bold]{self._name}[/bold]" from the desktop?\n')
             with Horizontal(classes="modal-buttons"):
                 yield Button("Cancel", id="cancel-btn", classes="btn-cancel")
-                yield Button("Delete", id="delete-btn", classes="btn-danger")
+                yield Button("Remove", id="delete-btn", classes="btn-danger")
 
     def on_mount(self) -> None:
         self.query_one("#delete-btn").focus()
@@ -428,6 +542,20 @@ class TaroApp(App):
                 self.call_later(self._rebuild_desktop)
 
         self.push_screen(AddEditModal(), handle)
+
+    def open_context_menu(self, index: int) -> None:
+        if index >= len(self._apps):
+            return
+
+        def handle(action: str | None) -> None:
+            if action == "launch-btn":
+                self.do_launch(self._apps[index]["command"])
+            elif action == "edit-btn":
+                self.open_edit(index)
+            elif action == "remove-btn":
+                self.open_delete(index)
+
+        self.push_screen(ContextMenu(self._apps[index]), handle)
 
     def open_edit(self, index: int) -> None:
         if index >= len(self._apps):
