@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+"""Taro — Terminal Desktop Launcher"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Container, Grid, Horizontal, Vertical, ScrollableContainer
+    from textual.screen import ModalScreen
+    from textual.widgets import Button, Footer, Header, Input, Label, Static
+    from textual import events
+    from textual.reactive import reactive
+    from textual.color import Color
+except ImportError:
+    sys.exit("Taro requires textual: pip install textual")
+
+CONFIG_DIR = Path.home() / ".config" / "taro"
+CONFIG_FILE = CONFIG_DIR / "apps.json"
+
+DEFAULT_APPS = [
+    {"name": "Bash", "command": "bash", "icon": "🐚"},
+    {"name": "Python", "command": "python3", "icon": "🐍"},
+    {"name": "Top", "command": "top", "icon": "📊"},
+    {"name": "Vim", "command": "vim", "icon": "📝"},
+]
+
+TARO_CSS = """
+Screen {
+    background: $background;
+}
+
+#header-bar {
+    height: 3;
+    background: $primary-darken-3;
+    border-bottom: solid $primary;
+    padding: 0 2;
+    align: left middle;
+}
+
+#title {
+    color: $accent;
+    text-style: bold;
+    width: 1fr;
+    content-align: left middle;
+}
+
+#header-buttons {
+    align: right middle;
+    width: auto;
+}
+
+#header-buttons Button {
+    margin: 0 1;
+    min-width: 6;
+    height: 1;
+    border: none;
+    background: $primary-darken-1;
+    color: $text;
+}
+
+#header-buttons Button:hover {
+    background: $primary;
+    color: $text;
+}
+
+#desktop {
+    padding: 2 4;
+    layout: grid;
+    grid-size: 6;
+    grid-gutter: 2 4;
+    grid-rows: 6;
+    overflow-y: auto;
+}
+
+AppIcon {
+    width: 14;
+    height: 5;
+    border: round $surface-lighten-2;
+    background: $surface;
+    content-align: center middle;
+    text-align: center;
+    padding: 0 1;
+    color: $text;
+}
+
+AppIcon:focus {
+    border: round $accent;
+    background: $surface-lighten-2;
+    color: $accent;
+}
+
+AppIcon.-selected {
+    border: round $warning;
+    background: $surface-lighten-2;
+}
+
+#status-bar {
+    height: 1;
+    background: $primary-darken-3;
+    border-top: solid $primary-darken-1;
+    padding: 0 2;
+    color: $text-muted;
+    content-align: left middle;
+}
+
+/* Modal */
+AddEditModal {
+    align: center middle;
+}
+
+ConfirmModal {
+    align: center middle;
+}
+
+#modal-container {
+    width: 50;
+    height: auto;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#confirm-container {
+    width: 40;
+    height: auto;
+    background: $surface;
+    border: round $error;
+    padding: 1 2;
+}
+
+.modal-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+    text-align: center;
+    width: 100%;
+}
+
+.field-label {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+.field-input {
+    margin-top: 0;
+    border: round $primary;
+    background: $surface-lighten-1;
+}
+
+.field-input:focus {
+    border: round $accent;
+}
+
+.icon-preview {
+    text-align: center;
+    width: 100%;
+    height: 3;
+    border: round $surface-lighten-2;
+    content-align: center middle;
+    margin-top: 1;
+    color: $accent;
+}
+
+.modal-buttons {
+    margin-top: 1;
+    align: right middle;
+    height: auto;
+}
+
+.modal-buttons Button {
+    margin-left: 1;
+}
+
+.btn-primary {
+    background: $primary;
+}
+
+.btn-danger {
+    background: $error;
+}
+
+.btn-cancel {
+    background: $surface-lighten-2;
+}
+"""
+
+
+def load_apps() -> list[dict]:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(DEFAULT_APPS, indent=2))
+    return list(DEFAULT_APPS)
+
+
+def save_apps(apps: list[dict]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(apps, indent=2))
+
+
+def in_multiplexer() -> bool:
+    return (
+        "TMUX" in os.environ
+        or os.environ.get("TERM_PROGRAM") == "tmux"
+        or "BYOBU_BACKEND" in os.environ
+        or "BYOBU_WINDOW_NAME" in os.environ
+    )
+
+
+def launch_command(command: str) -> None:
+    if in_multiplexer():
+        subprocess.Popen(["tmux", "new-window", command])
+    else:
+        os.execvp("sh", ["sh", "-c", command])
+
+
+class AppIcon(Static, can_focus=True):
+    """A single desktop icon tile."""
+
+    BINDINGS = [
+        Binding("enter", "launch", "Launch"),
+        Binding("e", "edit", "Edit"),
+        Binding("delete", "delete_app", "Delete"),
+    ]
+
+    def __init__(self, app_data: dict, index: int, **kwargs) -> None:
+        self._app_data = app_data
+        self._index = index
+        super().__init__(**kwargs)
+        self._update_content()
+
+    def _update_content(self) -> None:
+        icon = self._app_data.get("icon", "▶")
+        name = self._app_data.get("name", "App")
+        self.update(f"{icon}\n\n[bold]{name}[/bold]")
+
+    def refresh_data(self, app_data: dict) -> None:
+        self._app_data = app_data
+        self._update_content()
+
+    def on_enter(self, event: events.Enter) -> None:
+        self.focus()
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        if event.button == 3:
+            self.app.open_edit(self._index)
+        else:
+            self.action_launch()
+
+    def action_launch(self) -> None:
+        self.app.do_launch(self._app_data["command"])
+
+    def action_edit(self) -> None:
+        self.app.open_edit(self._index)
+
+    def action_delete_app(self) -> None:
+        self.app.open_delete(self._index)
+
+
+class AddEditModal(ModalScreen):
+    """Add or edit an app entry."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Cancel")]
+
+    def __init__(self, app_data: dict | None = None, index: int = -1, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._app_data = app_data or {}
+        self._index = index
+        self._editing = app_data is not None
+
+    def compose(self) -> ComposeResult:
+        title = "Edit App" if self._editing else "Add App"
+        with Container(id="modal-container"):
+            yield Label(title, classes="modal-title")
+            yield Label("Icon (emoji or character)", classes="field-label")
+            yield Input(
+                value=self._app_data.get("icon", "▶"),
+                placeholder="▶",
+                id="icon-input",
+                classes="field-input",
+            )
+            yield Label("", id="icon-preview", classes="icon-preview")
+            yield Label("Name", classes="field-label")
+            yield Input(
+                value=self._app_data.get("name", ""),
+                placeholder="My App",
+                id="name-input",
+                classes="field-input",
+            )
+            yield Label("Command", classes="field-label")
+            yield Input(
+                value=self._app_data.get("command", ""),
+                placeholder="bash -c '...'",
+                id="cmd-input",
+                classes="field-input",
+            )
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Cancel", id="cancel-btn", classes="btn-cancel")
+                label = "Save" if self._editing else "Add"
+                yield Button(label, id="save-btn", classes="btn-primary")
+
+    def on_mount(self) -> None:
+        self._update_preview()
+        self.query_one("#icon-input").focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "icon-input":
+            self._update_preview()
+
+    def _update_preview(self) -> None:
+        icon = self.query_one("#icon-input", Input).value or "▶"
+        preview = self.query_one("#icon-preview", Label)
+        preview.update(f"[bold]{icon}[/bold]")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            icon = self.query_one("#icon-input", Input).value.strip() or "▶"
+            name = self.query_one("#name-input", Input).value.strip()
+            command = self.query_one("#cmd-input", Input).value.strip()
+            if not name or not command:
+                return
+            self.dismiss({"icon": icon, "name": name, "command": command})
+
+
+class ConfirmModal(ModalScreen):
+    """Delete confirmation dialog."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Cancel")]
+
+    def __init__(self, name: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._name = name
+
+    def compose(self) -> ComposeResult:
+        with Container(id="confirm-container"):
+            yield Label("Delete App", classes="modal-title")
+            yield Label(f'\nRemove "[bold]{self._name}[/bold]" from the desktop?\n')
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Cancel", id="cancel-btn", classes="btn-cancel")
+                yield Button("Delete", id="delete-btn", classes="btn-danger")
+
+    def on_mount(self) -> None:
+        self.query_one("#delete-btn").focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "delete-btn")
+
+
+class TaroApp(App):
+    """Taro Terminal Desktop."""
+
+    CSS = TARO_CSS
+    TITLE = "Taro Desktop"
+    ENABLE_COMMAND_PALETTE = False
+
+    BINDINGS = [
+        Binding("q", "quit", "Quit", show=True),
+        Binding("a", "add_app", "Add App", show=True),
+        Binding("f1", "help_keys", "Help", show=False),
+        Binding("left", "nav(-1)", "←", show=False),
+        Binding("right", "nav(1)", "→", show=False),
+        Binding("up", "nav(-6)", "↑", show=False),
+        Binding("down", "nav(6)", "↓", show=False),
+    ]
+
+    GRID_COLS = 6
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._apps: list[dict] = load_apps()
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="header-bar"):
+            yield Label(" 🌸 Taro Desktop", id="title")
+            with Horizontal(id="header-buttons"):
+                yield Button("+ Add", id="add-btn")
+                yield Button("✕ Quit", id="quit-btn")
+        with ScrollableContainer(id="desktop"):
+            for i, app_data in enumerate(self._apps):
+                yield AppIcon(app_data, i, id=f"icon-{i}")
+        yield Label(self._status_text(), id="status-bar")
+
+    def on_mount(self) -> None:
+        icons = list(self.query(AppIcon))
+        if icons:
+            icons[0].focus()
+
+    def action_nav(self, delta: int) -> None:
+        icons = list(self.query(AppIcon))
+        if not icons:
+            return
+        focused = self.focused
+        if focused in icons:
+            idx = (icons.index(focused) + delta) % len(icons)
+        else:
+            idx = 0
+        icons[idx].focus()
+
+    def _status_text(self) -> str:
+        mode = "tmux/byobu (opens in new tab)" if in_multiplexer() else "standalone"
+        return (
+            f" [click] Launch  [right-click / e] Edit  [del] Delete  [a] Add  [q] Quit"
+            f"    mode: {mode}"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "add-btn":
+            self.action_add_app()
+        elif event.button.id == "quit-btn":
+            self.exit()
+
+    def action_add_app(self) -> None:
+        def handle(result):
+            if result:
+                self._apps.append(result)
+                save_apps(self._apps)
+                self.call_later(self._rebuild_desktop)
+
+        self.push_screen(AddEditModal(), handle)
+
+    def open_edit(self, index: int) -> None:
+        if index >= len(self._apps):
+            return
+
+        def handle(result):
+            if result:
+                self._apps[index] = result
+                save_apps(self._apps)
+                self.call_later(self._rebuild_desktop)
+
+        self.push_screen(AddEditModal(app_data=self._apps[index], index=index), handle)
+
+    def open_delete(self, index: int) -> None:
+        if index >= len(self._apps):
+            return
+        name = self._apps[index].get("name", "App")
+
+        def handle(confirmed):
+            if confirmed:
+                self._apps.pop(index)
+                save_apps(self._apps)
+                self.call_later(self._rebuild_desktop)
+
+        self.push_screen(ConfirmModal(name=name), handle)
+
+    def do_launch(self, command: str) -> None:
+        if in_multiplexer():
+            self.notify(f"Opening in new tab: {command}", timeout=2)
+            launch_command(command)
+        else:
+            self.exit(result=command)
+
+    async def _rebuild_desktop(self) -> None:
+        desktop = self.query_one("#desktop", ScrollableContainer)
+        await desktop.remove_children()
+        for i, app_data in enumerate(self._apps):
+            await desktop.mount(AppIcon(app_data, i, id=f"icon-{i}"))
+        icons = list(self.query(AppIcon))
+        if icons:
+            icons[0].focus()
+
+    def action_help_keys(self) -> None:
+        self.notify(
+            "[click] Launch  [right-click/e] Edit  [del] Delete  [a] Add  [q] Quit",
+            title="Keybindings",
+            timeout=4,
+        )
+
+
+def main():
+    while True:
+        app = TaroApp()
+        result = app.run()
+        if result and not in_multiplexer():
+            subprocess.run(["sh", "-c", result])
+        else:
+            break
+
+
+if __name__ == "__main__":
+    main()
