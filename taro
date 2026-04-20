@@ -121,6 +121,32 @@ ContextMenu {
     align: center middle;
 }
 
+ReorderModal {
+    align: center middle;
+}
+
+#reorder-container {
+    width: 40;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+.reorder-hint {
+    color: $text-muted;
+    text-align: center;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#reorder-list {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+}
+
 #context-menu {
     width: 28;
     height: auto;
@@ -438,6 +464,7 @@ class ContextMenu(ModalScreen):
             yield Label(f"{icon}  {name}", classes="modal-title")
             yield Button("▶  Launch", id="launch-btn")
             yield Button("✎  Edit", id="edit-btn")
+            yield Button("⇅  Reorder All", id="reorder-btn")
             yield Button("✕  Remove", id="remove-btn", classes="btn-danger")
 
     def on_mount(self) -> None:
@@ -481,11 +508,16 @@ class TaroApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("a", "add_app", "Add App", show=True),
+        Binding("r", "reorder", "Reorder", show=True),
         Binding("f1", "help_keys", "Help", show=False),
         Binding("left", "nav(-1)", "←", show=False),
         Binding("right", "nav(1)", "→", show=False),
         Binding("up", "nav(-6)", "↑", show=False),
         Binding("down", "nav(6)", "↓", show=False),
+        Binding("shift+left", "move_icon(-1)", "move ←", show=False),
+        Binding("shift+right", "move_icon(1)", "move →", show=False),
+        Binding("shift+up", "move_icon(-6)", "move ↑", show=False),
+        Binding("shift+down", "move_icon(6)", "move ↓", show=False),
     ]
 
     GRID_COLS = 6
@@ -509,6 +541,20 @@ class TaroApp(App):
         icons = list(self.query(AppIcon))
         if icons:
             icons[0].focus()
+
+    def action_move_icon(self, delta: int) -> None:
+        icons = list(self.query(AppIcon))
+        focused = self.focused
+        if focused not in icons:
+            return
+        idx = icons.index(focused)
+        new_idx = (idx + delta) % len(self._apps)
+        self._apps[idx], self._apps[new_idx] = self._apps[new_idx], self._apps[idx]
+        save_apps(self._apps)
+        self.call_later(self._rebuild_desktop, new_idx)
+
+    def action_reorder(self) -> None:
+        self.open_reorder()
 
     def action_nav(self, delta: int) -> None:
         icons = list(self.query(AppIcon))
@@ -552,10 +598,21 @@ class TaroApp(App):
                 self.do_launch(self._apps[index]["command"])
             elif action == "edit-btn":
                 self.open_edit(index)
+            elif action == "reorder-btn":
+                self.open_reorder()
             elif action == "remove-btn":
                 self.open_delete(index)
 
         self.push_screen(ContextMenu(self._apps[index]), handle)
+
+    def open_reorder(self) -> None:
+        def handle(result: list[dict] | None) -> None:
+            if result is not None:
+                self._apps = result
+                save_apps(self._apps)
+                self.call_later(self._rebuild_desktop)
+
+        self.push_screen(ReorderModal(self._apps), handle)
 
     def open_edit(self, index: int) -> None:
         if index >= len(self._apps):
@@ -589,14 +646,14 @@ class TaroApp(App):
         else:
             self.exit(result=command)
 
-    async def _rebuild_desktop(self) -> None:
+    async def _rebuild_desktop(self, focus_index: int = 0) -> None:
         desktop = self.query_one("#desktop", ScrollableContainer)
         await desktop.remove_children()
         for i, app_data in enumerate(self._apps):
             await desktop.mount(AppIcon(app_data, i, id=f"icon-{i}"))
         icons = list(self.query(AppIcon))
         if icons:
-            icons[0].focus()
+            icons[max(0, min(focus_index, len(icons) - 1))].focus()
 
     def action_help_keys(self) -> None:
         self.notify(
