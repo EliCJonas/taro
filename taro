@@ -162,7 +162,8 @@ ReorderModal {
     background: $surface-lighten-1;
 }
 
-#context-menu Button:focus {
+#context-menu Button:focus,
+#context-menu Button:hover {
     background: $primary;
 }
 
@@ -451,7 +452,13 @@ class ReorderModal(ModalScreen):
 class ContextMenu(ModalScreen):
     """Right-click context menu for an icon."""
 
-    BINDINGS = [Binding("escape", "dismiss", "Close")]
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("up", "focus_prev", show=False),
+        Binding("down", "focus_next", show=False),
+    ]
+
+    _BUTTON_IDS = ["launch-btn", "edit-btn", "reorder-btn", "remove-btn"]
 
     def __init__(self, app_data: dict, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -469,6 +476,21 @@ class ContextMenu(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#launch-btn").focus()
+
+    def _focused_index(self) -> int:
+        focused = self.focused
+        for i, bid in enumerate(self._BUTTON_IDS):
+            if focused and focused.id == bid:
+                return i
+        return 0
+
+    def action_focus_next(self) -> None:
+        idx = (self._focused_index() + 1) % len(self._BUTTON_IDS)
+        self.query_one(f"#{self._BUTTON_IDS[idx]}").focus()
+
+    def action_focus_prev(self) -> None:
+        idx = (self._focused_index() - 1) % len(self._BUTTON_IDS)
+        self.query_one(f"#{self._BUTTON_IDS[idx]}").focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id)
