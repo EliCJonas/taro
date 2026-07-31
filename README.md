@@ -1,6 +1,3 @@
-# taro
-![Available for Auro](https://img.shields.io/badge/Available_for-Auro-4c1)
-
 # <p align="center">taro</p>
 
 <p align="center">
@@ -14,7 +11,6 @@
   <i>A TUI launcher program to start apps you add.</i>
 </p>
 
----
 
 
 
