@@ -58,8 +58,8 @@ taro is a TUI (text-based user interface) launcher program that enables users to
 App entries are stored in a configuration file or directory that you can manually edit. Add new entries by specifying the app name, command path, and optional icon for display in the launcher.
 
 ## Screenshot
-<img width="439" height="495" alt="Screenshot 2026-09-15 9 12 49 PM" src="https://github.com/user-attachments/assets/6782f407-ad5f-4617-9521-6c2540e40614" />
+<img width="1907" height="1142" alt="screenshot" src="https://github.com/user-attachments/assets/731b3af8-cd8e-410c-8672-969cb0debc5b" />
+
 
 ## Integration
-taro is designed to integrate with the Auro p
-ackage manager, allowing seamless installation of new apps and updates. Use Auro to manage your app library directly from the terminal.
+taro is designed to integrate with the Auro package manager, allowing seamless installation of new apps and updates. Use Auro to manage your app library directly from the terminal.
